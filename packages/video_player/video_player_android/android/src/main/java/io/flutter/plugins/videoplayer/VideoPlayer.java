@@ -20,7 +20,9 @@ import com.google.android.exoplayer2.PlaybackException;
 import com.google.android.exoplayer2.PlaybackParameters;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.Player.Listener;
+import com.google.android.exoplayer2.analytics.AnalyticsListener;
 import com.google.android.exoplayer2.audio.AudioAttributes;
+import com.google.android.exoplayer2.source.MediaLoadData;
 import com.google.android.exoplayer2.source.MediaSource;
 import com.google.android.exoplayer2.source.ProgressiveMediaSource;
 import com.google.android.exoplayer2.source.dash.DashMediaSource;
@@ -62,7 +64,11 @@ final class VideoPlayer {
 
   private final VideoPlayerOptions options;
 
+  private Context context;
+
   private DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory();
+
+  private MediaSource mediaSource;
 
   VideoPlayer(
       Context context,
@@ -72,6 +78,7 @@ final class VideoPlayer {
       String formatHint,
       @NonNull Map<String, String> httpHeaders,
       VideoPlayerOptions options) {
+    this.context = context;
     this.eventChannel = eventChannel;
     this.textureEntry = textureEntry;
     this.options = options;
@@ -83,7 +90,7 @@ final class VideoPlayer {
     DataSource.Factory dataSourceFactory =
         new DefaultDataSource.Factory(context, httpDataSourceFactory);
 
-    MediaSource mediaSource = buildMediaSource(uri, dataSourceFactory, formatHint);
+    mediaSource = buildMediaSource(uri, dataSourceFactory, formatHint);
 
     exoPlayer.setMediaSource(mediaSource);
     exoPlayer.prepare();
@@ -190,62 +197,8 @@ final class VideoPlayer {
     exoPlayer.setVideoSurface(surface);
     setAudioAttributes(exoPlayer, options.mixWithOthers);
 
-    exoPlayer.addListener(
-        new Listener() {
-          private boolean isBuffering = false;
-
-          public void setBuffering(boolean buffering) {
-            if (isBuffering != buffering) {
-              isBuffering = buffering;
-              Map<String, Object> event = new HashMap<>();
-              event.put("event", isBuffering ? "bufferingStart" : "bufferingEnd");
-              eventSink.success(event);
-            }
-          }
-
-          @Override
-          public void onPlaybackStateChanged(final int playbackState) {
-            if (playbackState == Player.STATE_BUFFERING) {
-              setBuffering(true);
-              sendBufferingUpdate();
-            } else if (playbackState == Player.STATE_READY) {
-              if (!isInitialized) {
-                isInitialized = true;
-                sendInitialized();
-              }
-            } else if (playbackState == Player.STATE_ENDED) {
-              Map<String, Object> event = new HashMap<>();
-              event.put("event", "completed");
-              eventSink.success(event);
-            }
-
-            if (playbackState != Player.STATE_BUFFERING) {
-              setBuffering(false);
-            }
-          }
-
-          @Override
-          public void onPlayerError(@NonNull final PlaybackException error) {
-            setBuffering(false);
-            if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
-              // See https://exoplayer.dev/live-streaming.html#behindlivewindowexception-and-error_code_behind_live_window
-              exoPlayer.seekToDefaultPosition();
-              exoPlayer.prepare();
-            } else if (eventSink != null) {
-              eventSink.error("VideoError", "Video player had error " + error, null);
-            }
-          }
-
-          @Override
-          public void onIsPlayingChanged(boolean isPlaying) {
-            if (eventSink != null) {
-              Map<String, Object> event = new HashMap<>();
-              event.put("event", "isPlayingStateUpdate");
-              event.put("isPlaying", isPlaying);
-              eventSink.success(event);
-            }
-          }
-        });
+    exoPlayer.addAnalyticsListener(analyticsListener);
+    exoPlayer.addListener(listener);
   }
 
   void sendBufferingUpdate() {
@@ -343,4 +296,93 @@ final class VideoPlayer {
       exoPlayer.release();
     }
   }
+
+  final AnalyticsListener analyticsListener = new AnalyticsListener() {
+
+      private Format format;
+
+      public void onDownstreamFormatChanged(EventTime eventTime, MediaLoadData mediaLoadData) {
+          if(this.format != null &&
+                  mediaLoadData.trackFormat != null &&
+                  mediaLoadData.trackFormat.width != format.width &&
+                  mediaLoadData.trackFormat.height != format.height) {
+
+              long position = VideoPlayer.this.exoPlayer.getCurrentPosition();
+              VideoPlayer.this.exoPlayer.setPlayWhenReady(false);
+              VideoPlayer.this.exoPlayer.release();
+
+              ExoPlayer exoPlayer = new ExoPlayer.Builder(context).build();
+              exoPlayer.setMediaSource(VideoPlayer.this.mediaSource);
+              exoPlayer.prepare();
+
+              VideoPlayer.this.exoPlayer = exoPlayer;
+
+              exoPlayer.setVideoSurface(surface);
+              setAudioAttributes(exoPlayer, options.mixWithOthers);
+
+              exoPlayer.addAnalyticsListener(analyticsListener);
+              exoPlayer.addListener(listener);
+
+              exoPlayer.seekTo(position);
+              exoPlayer.setPlayWhenReady(true);
+          }
+          this.format = mediaLoadData.trackFormat;
+      }
+  };
+
+  final Listener listener = new Listener() {
+      private boolean isBuffering = false;
+
+      public void setBuffering(boolean buffering) {
+          if (isBuffering != buffering) {
+              isBuffering = buffering;
+              Map<String, Object> event = new HashMap<>();
+              event.put("event", isBuffering ? "bufferingStart" : "bufferingEnd");
+              eventSink.success(event);
+          }
+      }
+
+      @Override
+      public void onPlaybackStateChanged(final int playbackState) {
+          if (playbackState == Player.STATE_BUFFERING) {
+              setBuffering(true);
+              sendBufferingUpdate();
+          } else if (playbackState == Player.STATE_READY) {
+              if (!isInitialized) {
+                  isInitialized = true;
+                  sendInitialized();
+              }
+          } else if (playbackState == Player.STATE_ENDED) {
+              Map<String, Object> event = new HashMap<>();
+              event.put("event", "completed");
+              eventSink.success(event);
+          }
+
+          if (playbackState != Player.STATE_BUFFERING) {
+              setBuffering(false);
+          }
+      }
+
+      @Override
+      public void onPlayerError(@NonNull final PlaybackException error) {
+          setBuffering(false);
+          if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+              // See https://exoplayer.dev/live-streaming.html#behindlivewindowexception-and-error_code_behind_live_window
+              exoPlayer.seekToDefaultPosition();
+              exoPlayer.prepare();
+          } else if (eventSink != null) {
+              eventSink.error("VideoError", "Video player had error " + error, null);
+          }
+      }
+
+      @Override
+      public void onIsPlayingChanged(boolean isPlaying) {
+          if (eventSink != null) {
+              Map<String, Object> event = new HashMap<>();
+              event.put("event", "isPlayingStateUpdate");
+              event.put("isPlaying", isPlaying);
+              eventSink.success(event);
+          }
+      }
+  };
 }
