@@ -16,6 +16,8 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackParameters;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import io.flutter.view.TextureRegistry;
 
@@ -38,7 +40,7 @@ final class VideoPlayer implements TextureRegistry.SurfaceProducer.Callback {
    * @param options options for playback.
    * @return a video player instance.
    */
-  @NonNull
+  @UnstableApi @NonNull
   static VideoPlayer create(
       @NonNull Context context,
       @NonNull VideoPlayerCallbacks events,
@@ -47,8 +49,12 @@ final class VideoPlayer implements TextureRegistry.SurfaceProducer.Callback {
       @NonNull VideoPlayerOptions options) {
     return new VideoPlayer(
         () -> {
+
+          DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(context)
+                  .setMediaCodecSelector(new SoftwareOnlyMediaCodecSelector());
+
           ExoPlayer.Builder builder =
-              new ExoPlayer.Builder(context)
+              new ExoPlayer.Builder(context, renderersFactory)
                   .setMediaSourceFactory(asset.getMediaSourceFactory(context));
           return builder.build();
         },
