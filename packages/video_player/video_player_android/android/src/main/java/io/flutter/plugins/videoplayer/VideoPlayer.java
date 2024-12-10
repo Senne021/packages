@@ -16,6 +16,7 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackParameters;
+import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
 import io.flutter.view.TextureRegistry;
 
@@ -103,12 +104,19 @@ final class VideoPlayer implements TextureRegistry.SurfaceProducer.Callback {
     exoPlayer.release();
   }
 
-  private ExoPlayer createVideoPlayer() {
+  @UnstableApi private ExoPlayer createVideoPlayer() {
     ExoPlayer exoPlayer = exoPlayerProvider.get();
     exoPlayer.setMediaItem(mediaItem);
     exoPlayer.prepare();
 
+    exoPlayer.setTrackSelectionParameters(
+            exoPlayer.getTrackSelectionParameters()
+                    .buildUpon()
+                    .setForceHighestSupportedBitrate(true)
+                    .setMaxVideoSize(1920, 1080)
+                    .build());
     exoPlayer.setVideoSurface(surfaceProducer.getSurface());
+
 
     boolean wasInitialized = savedStateDuring != null;
     exoPlayer.addListener(new ExoPlayerEventListener(exoPlayer, videoPlayerEvents, wasInitialized));
